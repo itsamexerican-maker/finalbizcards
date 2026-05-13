@@ -3,15 +3,14 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { Resend } from "resend";
 
-// Use the PUBLISHABLE key for the insert so Supabase treats this
-// as an anon request and the RLS "Anyone can submit" policy applies.
+// Public client for the card insert — anon RLS policy allows this
 const supabasePublic = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!
 );
 
-// Secret key client — only used for storage upload and photo URL update
-const supabaseAdmin = createClient(
+// Storage client for photo uploads only
+const supabaseStorage = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SECRET_KEY!
 );
@@ -42,7 +41,40 @@ export async function POST(req: NextRequest) {
 
     const session_id = crypto.randomUUID();
 
-    // Insert using the PUBLIC key so the anon RLS policy allows it
+    // ── Handle photo upload BEFORE insert so we can include URL in one go ──
+    let profile_photo_url: string | null = null;
+
+    if (photoFile && photoFile.size > 0) {
+      const validTypes = ["image/png", "image/jpeg", "image/jpg"];
+      if (!validTypes.includes(photoFile.type)) {
+        return NextResponse.json({ error: "Photo must be PNG or JPG." }, { status: 400 });
+      }
+      if (photoFile.size > 2 * 1024 * 1024) {
+        return NextResponse.json({ error: "Photo must be under 2MB." }, { status: 400 });
+      }
+
+      // Use session_id as folder since we don't have card.id yet
+      const timestamp = Date.now();
+      const random    = Math.random().toString(36).substring(2, 8);
+      const ext       = photoFile.type === "image/png" ? "png" : "jpg";
+      const filePath  = `submissions/${session_id}/${timestamp}_${random}.${ext}`;
+      const buffer    = new Uint8Array(await photoFile.arrayBuffer());
+
+      const { error: uploadError } = await supabaseStorage.storage
+        .from("profile-photos")
+        .upload(filePath, buffer, { contentType: photoFile.type, upsert: false });
+
+      if (!uploadError) {
+        const { data: urlData } = supabaseStorage.storage
+          .from("profile-photos")
+          .getPublicUrl(filePath);
+        profile_photo_url = urlData.publicUrl;
+      } else {
+        console.error("Photo upload error (non-fatal):", uploadError);
+      }
+    }
+
+    // ── Insert card with photo URL included in one single operation ────────
     const { data: card, error: insertError } = await supabasePublic
       .from("cards")
       .insert([{
@@ -51,9 +83,10 @@ export async function POST(req: NextRequest) {
         regiment,
         years_of_service,
         category_id,
-        status:       "pending",
+        status:            "pending",
         session_id,
-        submitted_at: new Date().toISOString(),
+        submitted_at:      new Date().toISOString(),
+        profile_photo_url, // included here — no separate UPDATE needed
       }])
       .select("id, name, rank, regiment")
       .single();
@@ -66,45 +99,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Handle optional photo upload using admin client
-    let profile_photo_url: string | null = null;
-
-    if (photoFile && photoFile.size > 0) {
-      const validTypes = ["image/png", "image/jpeg", "image/jpg"];
-      if (!validTypes.includes(photoFile.type)) {
-        return NextResponse.json({ error: "Photo must be PNG or JPG." }, { status: 400 });
-      }
-      if (photoFile.size > 2 * 1024 * 1024) {
-        return NextResponse.json({ error: "Photo must be under 2MB." }, { status: 400 });
-      }
-
-      const timestamp = Date.now();
-      const random    = Math.random().toString(36).substring(2, 8);
-      const ext       = photoFile.type === "image/png" ? "png" : "jpg";
-      const filePath  = `${card.id}/${timestamp}_${random}.${ext}`;
-      const buffer    = new Uint8Array(await photoFile.arrayBuffer());
-
-      const { error: uploadError } = await supabaseAdmin.storage
-        .from("profile-photos")
-        .upload(filePath, buffer, { contentType: photoFile.type, upsert: false });
-
-      if (!uploadError) {
-        const { data: urlData } = supabaseAdmin.storage
-          .from("profile-photos")
-          .getPublicUrl(filePath);
-        profile_photo_url = urlData.publicUrl;
-
-        // Use public client for the DB update — secret key doesn't bypass RLS
-        await supabasePublic
-          .from("cards")
-          .update({ profile_photo_url })
-          .eq("id", card.id);
-      } else {
-        console.error("Photo upload error (non-fatal):", uploadError);
-      }
-    }
-
-    // Send admin notification email
+    // ── Send admin notification email ──────────────────────────────────────
     const adminEmails = getAdminEmails();
     const appUrl      = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
     const approveUrl  = `${appUrl}/admin/submissions?action=approve&id=${card.id}`;
