@@ -1,14 +1,7 @@
 // app/api/admin/approve/route.ts
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
-
-// Server-side admin client using secret key
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SECRET_KEY!
-);
 
 function getAdminEmails(): string[] {
   return (process.env.ADMIN_EMAILS ?? process.env.ADMIN_EMAIL ?? "")
@@ -17,37 +10,35 @@ function getAdminEmails(): string[] {
     .filter(Boolean);
 }
 
-async function getRequestingUserEmail(req: NextRequest): Promise<string | null> {
-  try {
-    const cookieStore = await cookies();
-    const supabase = createServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!,
-      {
-        cookies: {
-          getAll: () => cookieStore.getAll(),
-          setAll: (cookiesToSet) => {
-            cookiesToSet.forEach(({ name, value, options }) =>
-              cookieStore.set(name, value, options)
-            );
-          },
+// Creates a Supabase client using the authenticated user's session
+// This means the update runs AS the logged-in user, so RLS allows it
+async function getSessionClient() {
+  const cookieStore = await cookies();
+  return createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!,
+    {
+      cookies: {
+        getAll: () => cookieStore.getAll(),
+        setAll: (cookiesToSet) => {
+          cookiesToSet.forEach(({ name, value, options }) =>
+            cookieStore.set(name, value, options)
+          );
         },
-      }
-    );
-    const { data: { user } } = await supabase.auth.getUser();
-    return user?.email ?? null;
-  } catch {
-    return null;
-  }
+      },
+    }
+  );
 }
 
 export async function POST(req: NextRequest) {
   try {
+    const supabase = await getSessionClient();
+
     // Verify the requesting user is an admin
-    const userEmail   = await getRequestingUserEmail(req);
+    const { data: { user } } = await supabase.auth.getUser();
     const adminEmails = getAdminEmails();
 
-    if (!userEmail || !adminEmails.includes(userEmail)) {
+    if (!user || !adminEmails.includes(user.email ?? "")) {
       return NextResponse.json({ error: "Unauthorized." }, { status: 403 });
     }
 
@@ -62,7 +53,8 @@ export async function POST(req: NextRequest) {
         ? { status: "approved", approved_at: new Date().toISOString() }
         : { status: "rejected" };
 
-    const { error } = await supabaseAdmin
+    // Update runs using the authenticated user's session — RLS allows this
+    const { error } = await supabase
       .from("cards")
       .update(updateData)
       .eq("id", id);
@@ -83,7 +75,8 @@ export async function POST(req: NextRequest) {
   }
 }
 
-// Also handle GET requests from email approve/reject links
+// GET handler for email approve/reject links
+// These come from clicking links in the notification email
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const id     = searchParams.get("id");
@@ -95,23 +88,40 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  const updateData =
-    action === "approve"
-      ? { status: "approved", approved_at: new Date().toISOString() }
-      : { status: "rejected" };
+  try {
+    const supabase = await getSessionClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    const adminEmails = getAdminEmails();
 
-  const { error } = await supabaseAdmin
-    .from("cards")
-    .update(updateData)
-    .eq("id", id!);
+    if (!user || !adminEmails.includes(user.email ?? "")) {
+      return NextResponse.redirect(
+        new URL("/admin/submissions?error=unauthorized", req.url)
+      );
+    }
 
-  if (error) {
+    const updateData =
+      action === "approve"
+        ? { status: "approved", approved_at: new Date().toISOString() }
+        : { status: "rejected" };
+
+    const { error } = await supabase
+      .from("cards")
+      .update(updateData)
+      .eq("id", id!);
+
+    if (error) {
+      return NextResponse.redirect(
+        new URL(`/admin/submissions?error=${encodeURIComponent(error.message)}`, req.url)
+      );
+    }
+
     return NextResponse.redirect(
-      new URL(`/admin/submissions?error=${encodeURIComponent(error.message)}`, req.url)
+      new URL(`/admin/submissions?success=${action}`, req.url)
+    );
+
+  } catch {
+    return NextResponse.redirect(
+      new URL("/admin/submissions?error=server", req.url)
     );
   }
-
-  return NextResponse.redirect(
-    new URL(`/admin/submissions?success=${action}`, req.url)
-  );
 }
