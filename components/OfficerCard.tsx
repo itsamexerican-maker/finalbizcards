@@ -1,3 +1,4 @@
+// components/OfficerCard.tsx
 "use client";
 
 import Image from "next/image";
@@ -8,9 +9,10 @@ export type Officer = {
   rank: string;
   regiment: string;
   years_of_service: number;
+  profile_photo_url?: string | null;
   categories: {
     name: string;
-    color: string; // Tailwind bg class e.g. "bg-blue-800"
+    color: string;
   };
 };
 
@@ -20,9 +22,6 @@ const RANK_ABBR: Record<string, string> = {
   "Major":              "MAJ.",
 };
 
-// Each map lets us derive border, divider, and text variants
-// from the bg class stored in the DB — all written out explicitly
-// so Tailwind v4 can detect them at build time via @source inline()
 const BORDER_COLOR: Record<string, string> = {
   "bg-blue-800":   "border-blue-800",
   "bg-gray-700":   "border-gray-700",
@@ -56,7 +55,7 @@ const TEXT_COLOR: Record<string, string> = {
   "bg-amber-700":  "text-amber-700",
 };
 
-function getAvatarUrl(name: string): string {
+function getDiceBearUrl(name: string): string {
   const seed = encodeURIComponent(name);
   return `https://api.dicebear.com/7.x/personas/svg?seed=${seed}&backgroundColor=b6e3f4,c0aede,d1d4f9,ffd5dc,ffdfbf`;
 }
@@ -68,6 +67,10 @@ export default function OfficerCard({ officer }: { officer: Officer }) {
   const textClass    = TEXT_COLOR[twColor]    ?? "text-stone-600";
   const abbr         = RANK_ABBR[officer.rank] ?? officer.rank.toUpperCase();
 
+  // Use uploaded photo if available, otherwise fall back to DiceBear
+  const avatarSrc = officer.profile_photo_url ?? getDiceBearUrl(officer.name);
+  const isRealPhoto = !!officer.profile_photo_url;
+
   return (
     <div
       className="group relative w-52 cursor-default rounded-sm border border-amber-700/40 bg-[#fdf6e3] shadow-md transition-transform duration-300 ease-[cubic-bezier(0.34,1.56,0.64,1)] hover:-translate-y-2.5 hover:-rotate-1 hover:shadow-2xl"
@@ -75,7 +78,7 @@ export default function OfficerCard({ officer }: { officer: Officer }) {
         backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='300'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='300' height='300' filter='url(%23n)' opacity='0.045'/%3E%3C/svg%3E")`,
       }}
     >
-      {/* ── Country color header band ── */}
+      {/* Country color header band */}
       <div className={`${twColor} flex items-center justify-between px-3 py-1.5`}>
         <span className="font-[Cinzel] text-[9px] font-bold tracking-widest text-white/95 uppercase">
           {abbr}
@@ -85,24 +88,32 @@ export default function OfficerCard({ officer }: { officer: Officer }) {
         </span>
       </div>
 
-      {/* ── Thin accent rule ── */}
+      {/* Thin accent rule */}
       <div className={`mx-2.5 h-px ${dividerClass} opacity-30`} />
 
-      {/* ── Avatar ── */}
+      {/* Avatar — real photo or DiceBear fallback */}
       <div
         className={`mx-auto mt-3.5 mb-2 flex h-[84px] w-[84px] items-center justify-center overflow-hidden rounded-full border-2 ${borderClass} bg-amber-50 shadow-md`}
       >
-        <Image
-          src={getAvatarUrl(officer.name)}
-          alt={`Portrait of ${officer.name}`}
-          width={84}
-          height={84}
-          className="h-full w-full object-cover"
-          unoptimized
-        />
+        {isRealPhoto ? (
+          <img
+            src={avatarSrc}
+            alt={`Portrait of ${officer.name}`}
+            className="h-full w-full object-cover"
+          />
+        ) : (
+          <Image
+            src={avatarSrc}
+            alt={`Portrait of ${officer.name}`}
+            width={84}
+            height={84}
+            className="h-full w-full object-cover"
+            unoptimized
+          />
+        )}
       </div>
 
-      {/* ── Card body ── */}
+      {/* Card body */}
       <div className="px-4 pb-4 text-center">
         <h2 className="font-[Cinzel] mt-1.5 mb-2 text-[12.5px] font-bold leading-snug tracking-wide text-[#2c1810]">
           {officer.name}
@@ -112,33 +123,21 @@ export default function OfficerCard({ officer }: { officer: Officer }) {
 
         <dl className="flex flex-col gap-1 text-left">
           <div className="flex items-baseline justify-between gap-1.5 border-b border-dotted border-amber-700/30 pb-1">
-            <dt className="font-['IM_Fell_English'] shrink-0 text-[9px] uppercase tracking-wider text-amber-800/70">
-              Rank
-            </dt>
-            <dd className="font-[Cinzel] text-right text-[10px] font-semibold text-[#2c1810]">
-              {officer.rank}
-            </dd>
+            <dt className="font-['IM_Fell_English'] shrink-0 text-[9px] uppercase tracking-wider text-amber-800/70">Rank</dt>
+            <dd className="font-[Cinzel] text-right text-[10px] font-semibold text-[#2c1810]">{officer.rank}</dd>
           </div>
           <div className="flex items-baseline justify-between gap-1.5 border-b border-dotted border-amber-700/30 pb-1">
-            <dt className="font-['IM_Fell_English'] shrink-0 text-[9px] uppercase tracking-wider text-amber-800/70">
-              Regiment
-            </dt>
-            <dd className="font-[Cinzel] text-right text-[10px] font-semibold text-[#2c1810]">
-              {officer.regiment}
-            </dd>
+            <dt className="font-['IM_Fell_English'] shrink-0 text-[9px] uppercase tracking-wider text-amber-800/70">Regiment</dt>
+            <dd className="font-[Cinzel] text-right text-[10px] font-semibold text-[#2c1810]">{officer.regiment}</dd>
           </div>
           <div className="flex items-baseline justify-between gap-1.5 pb-1">
-            <dt className="font-['IM_Fell_English'] shrink-0 text-[9px] uppercase tracking-wider text-amber-800/70">
-              Yrs. Service
-            </dt>
-            <dd className="font-[Cinzel] text-right text-[10px] font-semibold text-[#2c1810]">
-              {officer.years_of_service}
-            </dd>
+            <dt className="font-['IM_Fell_English'] shrink-0 text-[9px] uppercase tracking-wider text-amber-800/70">Yrs. Service</dt>
+            <dd className="font-[Cinzel] text-right text-[10px] font-semibold text-[#2c1810]">{officer.years_of_service}</dd>
           </div>
         </dl>
       </div>
 
-      {/* ── Corner ornaments ── */}
+      {/* Corner ornaments */}
       <span className={`absolute top-7 left-1.5 text-[8px] leading-none ${textClass} opacity-50`}>✦</span>
       <span className={`absolute top-7 right-1.5 text-[8px] leading-none ${textClass} opacity-50`}>✦</span>
       <span className={`absolute bottom-1.5 left-1.5 text-[8px] leading-none ${textClass} opacity-50`}>✦</span>
