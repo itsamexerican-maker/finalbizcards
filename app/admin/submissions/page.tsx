@@ -2,7 +2,7 @@
 "use client";
 export const dynamic = "force-dynamic";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { toast, Toaster } from "sonner";
@@ -33,7 +33,7 @@ function normalizeSubmission(raw: RawSubmission): Submission {
 const STATUS_FILTER = ["all", "pending", "approved", "rejected"] as const;
 type StatusFilter = typeof STATUS_FILTER[number];
 
-export default function AdminSubmissionsPage() {
+function AdminSubmissionsContent() {
   const router       = useRouter();
   const searchParams = useSearchParams();
 
@@ -357,5 +357,19 @@ export default function AdminSubmissionsPage() {
         </div>
       </main>
     </>
+  );
+}
+
+// Suspense wrapper required by Next.js App Router when using useSearchParams()
+// Without this Vercel will fail to build even though Codespaces dev mode works fine
+export default function AdminSubmissionsPage() {
+  return (
+    <Suspense fallback={
+      <div className="flex min-h-screen items-center justify-center" style={{ backgroundColor: "#f0deb4" }}>
+        <p className="font-['IM_Fell_English'] text-lg italic text-amber-800/60">Verifying credentials…</p>
+      </div>
+    }>
+      <AdminSubmissionsContent />
+    </Suspense>
   );
 }
