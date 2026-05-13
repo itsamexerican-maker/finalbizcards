@@ -4,7 +4,8 @@ import { createClient } from "@supabase/supabase-js";
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 
-const supabaseAdmin = createClient(
+// Admin client only for storage operations
+const supabaseStorage = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SECRET_KEY!
 );
@@ -16,37 +17,33 @@ function getAdminEmails(): string[] {
     .filter(Boolean);
 }
 
-async function getRequestingUserEmail(): Promise<string | null> {
-  try {
-    const cookieStore = await cookies();
-    const supabase = createServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!,
-      {
-        cookies: {
-          getAll: () => cookieStore.getAll(),
-          setAll: (cookiesToSet) => {
-            cookiesToSet.forEach(({ name, value, options }) =>
-              cookieStore.set(name, value, options)
-            );
-          },
+async function getSessionClient() {
+  const cookieStore = await cookies();
+  return createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!,
+    {
+      cookies: {
+        getAll: () => cookieStore.getAll(),
+        setAll: (cookiesToSet) => {
+          cookiesToSet.forEach(({ name, value, options }) =>
+            cookieStore.set(name, value, options)
+          );
         },
-      }
-    );
-    const { data: { user } } = await supabase.auth.getUser();
-    return user?.email ?? null;
-  } catch {
-    return null;
-  }
+      },
+    }
+  );
 }
 
 export async function POST(req: NextRequest) {
   try {
+    const supabase = await getSessionClient();
+
     // Verify admin
-    const userEmail   = await getRequestingUserEmail();
+    const { data: { user } } = await supabase.auth.getUser();
     const adminEmails = getAdminEmails();
 
-    if (!userEmail || !adminEmails.includes(userEmail)) {
+    if (!user || !adminEmails.includes(user.email ?? "")) {
       return NextResponse.json({ error: "Unauthorized." }, { status: 403 });
     }
 
@@ -71,7 +68,8 @@ export async function POST(req: NextRequest) {
     }
 
     // Fetch current card to get old photo URL
-    const { data: card } = await supabaseAdmin
+    // Uses session client so RLS allows the read
+    const { data: card } = await supabase
       .from("cards")
       .select("id, profile_photo_url")
       .eq("id", cardId)
@@ -83,44 +81,39 @@ export async function POST(req: NextRequest) {
         const url       = new URL(card.profile_photo_url);
         const pathParts = url.pathname.split("/profile-photos/");
         if (pathParts.length > 1) {
-          await supabaseAdmin.storage
+          await supabaseStorage.storage
             .from("profile-photos")
             .remove([pathParts[1]]);
         }
       } catch {
-        // Non-fatal — continue with upload
+        // Non-fatal
       }
     }
 
-    // Upload new photo
+    // Upload new photo using storage client
     const timestamp = Date.now();
     const random    = Math.random().toString(36).substring(2, 8);
     const ext       = photo.type === "image/png" ? "png" : "jpg";
     const filePath  = `${cardId}/${timestamp}_${random}.${ext}`;
+    const buffer    = new Uint8Array(await photo.arrayBuffer());
 
-    const arrayBuffer = await photo.arrayBuffer();
-    const buffer      = new Uint8Array(arrayBuffer);
-
-    const { error: uploadError } = await supabaseAdmin.storage
+    const { error: uploadError } = await supabaseStorage.storage
       .from("profile-photos")
-      .upload(filePath, buffer, {
-        contentType: photo.type,
-        upsert: false,
-      });
+      .upload(filePath, buffer, { contentType: photo.type, upsert: false });
 
     if (uploadError) {
       console.error("Upload error:", uploadError);
       return NextResponse.json({ error: "Photo upload failed." }, { status: 500 });
     }
 
-    const { data: urlData } = supabaseAdmin.storage
+    const { data: urlData } = supabaseStorage.storage
       .from("profile-photos")
       .getPublicUrl(filePath);
 
     const profile_photo_url = urlData.publicUrl;
 
-    // Update card with new photo URL
-    const { error: updateError } = await supabaseAdmin
+    // Update card with new photo URL using SESSION client so RLS allows it
+    const { error: updateError } = await supabase
       .from("cards")
       .update({ profile_photo_url })
       .eq("id", cardId);

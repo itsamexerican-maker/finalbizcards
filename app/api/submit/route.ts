@@ -94,7 +94,8 @@ export async function POST(req: NextRequest) {
           .getPublicUrl(filePath);
         profile_photo_url = urlData.publicUrl;
 
-        await supabaseAdmin
+        // Use public client for the DB update — secret key doesn't bypass RLS
+        await supabasePublic
           .from("cards")
           .update({ profile_photo_url })
           .eq("id", card.id);
